@@ -1153,6 +1153,17 @@ class TelegramBot:
 
 
 if __name__ == "__main__":
+    # Handle --profile flag first (before creating bot to show clean output)
+    if len(sys.argv) > 1 and sys.argv[1] == "--profile":
+        bot = ClawdBot()
+        from agents.profiler import ProfilerAgent
+        profiler = ProfilerAgent(bot)
+        profile = profiler.build_profile()
+        if profile:
+            print("\n" + "=" * 60)
+            print(profile)
+        sys.exit(0)
+
     bot = ClawdBot()
 
     # Check command line args
