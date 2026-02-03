@@ -1,0 +1,19 @@
+# Environment
+.env
+venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Memory (contains personal data)
+# Note: You might want to keep this for backup
+# ~/.clawdbot_memory.json

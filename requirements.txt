@@ -1,0 +1,9 @@
+anthropic
+openai
+python-telegram-bot
+python-dotenv
+streamlit
+pillow
+requests
+
+# Note: Run with: source venv/bin/activate && python clawdbot.py
