@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-ClawdBot v11.0 - JARVIS Mode Fixed
-==================================
-Fixes the v10 loop bug where Claude kept using open_url (Safari)
-instead of browser_navigate (Playwright).
+ClawdBot v11.1 - JARVIS Mode with Comet Browser
+===============================================
+Fixes the v10 loop bug + connects to Comet browser (saved sessions!)
 
-Key Changes from v10:
+Key Changes:
 1. AGENTIC-ONLY TOOLS: No open_url/open_app in browser mode
-2. BETTER PROMPT: Explains that screenshots come from Playwright browser
-3. SCROLL_FIND: Can scroll through lists to find people (Instagram followers)
-4. SMARTER REASONING: Multi-step planning for complex tasks
+2. COMET FIRST: Connects to Comet browser where you're logged in
+3. IMESSAGE ROUTING: "text john" goes to iMessage, "dm john on insta" goes browser
+4. SCROLL_FIND: Can scroll through lists to find people (Instagram followers)
 
 Architecture:
 - AgenticLoop: SENSE → THINK → ACT → VERIFY → REPEAT
@@ -44,7 +43,7 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY") or open(
     os.path.expanduser("~/clawdbot-v2/.env")
 ).read().split("CLAUDE_API_KEY=")[1].split("\n")[0]
 
-VERSION = "11.0"
+VERSION = "11.1"
 MAX_STEPS = 35  # More steps for complex tasks
 
 # =============================================================================
@@ -492,15 +491,106 @@ class ClawdBot:
         ts = datetime.now().strftime("%H:%M:%S")
         print(f"{ts} [{tag:8}] {msg}")
 
+    def needs_imessage(self, request: str) -> bool:
+        """Check if this is an iMessage/text request (NOT Instagram DM)"""
+        r = request.lower()
+
+        # Social platforms that mean browser, not iMessage
+        social = ['instagram', 'twitter', 'facebook', 'linkedin', 'discord', 'whatsapp', 'on ig', 'on insta', 'on twitter']
+
+        # If any social platform is mentioned, NOT iMessage
+        if any(p in r for p in social):
+            return False
+
+        # Explicit iMessage triggers
+        if 'imessage' in r or 'text message' in r:
+            return True
+
+        # "text X" (like "text muhlis saying hello")
+        if r.startswith('text ') or ' text ' in r:
+            return True
+
+        # "message X" without social platform (already checked above)
+        if 'message' in r and (' to ' in r or r.startswith('message ')):
+            return True
+
+        # "send X to Y" patterns (without social platform)
+        if 'send' in r and ('saying' in r or ' to ' in r):
+            return True
+
+        return False
+
     def needs_browser(self, request: str) -> bool:
         """Determine if request needs browser automation"""
         request_lower = request.lower()
         browser_keywords = [
             'instagram', 'twitter', 'x.com', 'facebook', 'youtube', 'linkedin',
             'follow', 'like', 'post', 'tweet', 'browse', 'website', 'web',
-            'search google', 'click', 'navigate', 'login', 'sign in', 'dm', 'message on'
+            'search google', 'click', 'navigate', 'login', 'sign in', 'dm',
+            'message on instagram', 'message on twitter', 'on ig', 'on insta'
         ]
         return any(kw in request_lower for kw in browser_keywords)
+
+    def handle_imessage(self, request: str) -> str:
+        """Handle iMessage directly without Claude routing"""
+
+        # Parse: various patterns
+        patterns = [
+            r'(?:send\s+)?(?:i?message|text)\s+(?:to\s+)?["\']?(\w+)["\']?\s+(?:saying|with|:)?\s*["\']?(.+?)["\']?$',
+            r'(?:send|text)\s+["\'](.+?)["\']\s+to\s+(\w+)',
+            r'(?:tell|ask)\s+(\w+)\s+(.+)',
+            r'(?:message|text)\s+(\w+)\s+(.+)',
+        ]
+
+        recipient = None
+        message = None
+
+        for pattern in patterns:
+            match = re.search(pattern, request, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                if len(groups) >= 2:
+                    # Check which group is name vs message
+                    g1, g2 = groups[0], groups[1]
+                    # If first group looks like a message (has spaces), swap
+                    if ' ' in g1 and ' ' not in g2:
+                        recipient, message = g2, g1
+                    else:
+                        recipient, message = g1, g2
+                    break
+
+        if not recipient:
+            # Simple extraction: "text john hello" or "message muhlis hi"
+            words = request.lower()
+            for prefix in ['send text to ', 'text to ', 'message to ', 'imessage to ', 'text ', 'message ', 'imessage ']:
+                if prefix in words:
+                    rest = words.split(prefix, 1)[1].strip()
+                    parts = rest.split(' ', 1)
+                    recipient = parts[0]
+                    message = parts[1] if len(parts) > 1 else "Hey"
+                    break
+
+        if not recipient:
+            return "✗ Could not parse recipient. Try: 'text john saying hello'"
+
+        # Clean up
+        recipient = recipient.strip('"\'')
+        message = message.strip('"\'') if message else "Hey"
+
+        self.log("IMESSAGE", f"To: {recipient}, Message: {message}")
+
+        # Use the local tool
+        tool = self.local_tools.get("send_imessage")
+        if tool:
+            result = tool.execute(recipient=recipient, message=message)
+            if result.get("verified"):
+                return f"✓ Message sent and verified to {result.get('recipient')}: \"{message}\""
+            elif result.get("sent"):
+                return f"✓ Message sent to {result.get('recipient')}: \"{message}\""
+            else:
+                return f"✗ Failed: {result.get('error', 'unknown')}"
+
+        return "✗ iMessage tool not available"
 
     def process(self, request: str) -> str:
         """Process any request"""
@@ -514,9 +604,14 @@ class ClawdBot:
         if text in ['help', '?']:
             return self.get_help()
 
-        # Determine approach
+        # CHECK iMESSAGE FIRST (before browser!)
+        if self.needs_imessage(request):
+            self.log("MODE", "iMessage mode (local)")
+            return self.handle_imessage(request)
+
+        # Then browser
         if self.needs_browser(request) and self.agentic:
-            self.log("MODE", "Agentic browser mode (v11 fixed)")
+            self.log("MODE", "Agentic browser mode (v11.1)")
             result = self.agentic.run(request)
 
             if result.get("success"):
@@ -585,26 +680,33 @@ Return ONLY JSON:"""
             return f"✗ Error: {e}"
 
     def get_help(self) -> str:
-        browser_status = "✓ Browser automation ready" if self.agentic else "✗ Browser not available"
-        return f"""ClawdBot v{VERSION} - JARVIS Mode (Fixed)
+        browser_status = "✓ Browser ready (connects to Comet for saved logins)" if self.agentic else "✗ Browser not available"
+        return f"""ClawdBot v{VERSION} - JARVIS Mode with Comet
 {browser_status}
 
-WHAT'S FIXED IN v11:
-• No more loop bug! Uses browser-only tools in agentic mode
-• Better prompts - Claude understands it controls the Playwright browser
+WHAT'S NEW IN v11.1:
+• Connects to Comet browser first (saved Instagram/Twitter logins!)
+• Smart routing: "text john" → iMessage, "dm john on insta" → Browser
 • scroll_find - Can search through followers/following lists
-• Smarter multi-step reasoning
+• No more loop bugs
 
-BROWSER TASKS:
+BROWSER TASKS (uses Comet with your logins):
   "send message to abeer on instagram saying hi"
   "follow 5 people on instagram"
   "search youtube for lofi and play it"
   "like some posts on twitter"
 
-LOCAL TASKS:
-  "send hi to john on imessage"
+IMESSAGE TASKS (local):
+  "text muhlis saying hello"
+  "imessage john hey whats up"
+  "message halit hi"
+
+OTHER LOCAL TASKS:
   "open spotify"
   "what time is it"
+
+SETUP: Start Comet with debug port for saved sessions:
+  /Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222 &
 
 Type 'quit' to exit.
 """
@@ -617,8 +719,8 @@ Type 'quit' to exit.
 def main():
     print(f"""
 ╔═══════════════════════════════════════════════════════════╗
-║  ClawdBot v{VERSION} - JARVIS Mode (Fixed)                     ║
-║  I SEE, I THINK, I ACT. No more loops!                    ║
+║  ClawdBot v{VERSION} - JARVIS Mode with Comet                  ║
+║  Connects to YOUR browser. Uses YOUR logins.              ║
 ╚═══════════════════════════════════════════════════════════╝
 """)
 

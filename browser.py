@@ -1,16 +1,18 @@
 """
-Browser Controller for ClawdBot v11
-====================================
+Browser Controller for ClawdBot v11.1
+=====================================
 Uses Playwright for reliable browser automation.
 Can navigate, click, type, read pages, take screenshots, and verify actions.
 
 NEW in v10: screenshot_base64() for Claude vision integration.
 NEW in v11: scroll_find() to search scrolling lists for text.
+NEW in v11.1: Connect to Comet browser first (has saved sessions!)
 """
 
 import time
 import json
 import base64
+import subprocess
 from typing import Dict, List, Optional, Any
 
 try:
@@ -30,7 +32,7 @@ class BrowserController:
         self._connected = False
 
     def connect(self) -> bool:
-        """Connect to or launch a browser"""
+        """Connect to Comet browser first (has saved sessions!), then Chrome, then launch fresh"""
         if not PLAYWRIGHT_AVAILABLE:
             return False
 
@@ -40,11 +42,35 @@ class BrowserController:
         try:
             self.playwright = sync_playwright().start()
 
-            # Try to connect to existing Chrome first
+            # PRIORITY 1: Connect to Comet/Chrome on debug port (has saved logins!)
+            for port in [9222, 9223]:
+                try:
+                    self.browser = self.playwright.chromium.connect_over_cdp(
+                        f"http://localhost:{port}"
+                    )
+                    contexts = self.browser.contexts
+                    if contexts:
+                        self.page = contexts[0].pages[0] if contexts[0].pages else contexts[0].new_page()
+                    else:
+                        context = self.browser.new_context()
+                        self.page = context.new_page()
+                    self._connected = True
+                    print(f"✓ Connected to browser on port {port} (saved sessions available)")
+                    return True
+                except:
+                    pass
+
+            # PRIORITY 2: Try to START Comet with debug port
             try:
-                self.browser = self.playwright.chromium.connect_over_cdp(
-                    "http://localhost:9222"
-                )
+                print("Starting Comet browser with debug port...")
+                subprocess.Popen([
+                    '/Applications/Comet.app/Contents/MacOS/Comet',
+                    '--remote-debugging-port=9222',
+                    '--remote-allow-origins=*'
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(3)
+
+                self.browser = self.playwright.chromium.connect_over_cdp("http://localhost:9222")
                 contexts = self.browser.contexts
                 if contexts:
                     self.page = contexts[0].pages[0] if contexts[0].pages else contexts[0].new_page()
@@ -52,11 +78,15 @@ class BrowserController:
                     context = self.browser.new_context()
                     self.page = context.new_page()
                 self._connected = True
+                print("✓ Started Comet with debug port (saved sessions available)")
                 return True
             except:
                 pass
 
-            # Launch new browser if can't connect
+            # PRIORITY 3: Launch fresh Playwright browser (NO saved sessions!)
+            print("⚠ Warning: Launching fresh browser - NO saved logins!")
+            print("  To use saved sessions, start Comet first:")
+            print("  /Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222 &")
             self.browser = self.playwright.chromium.launch(
                 headless=False,
                 args=['--start-maximized']
