@@ -49,13 +49,31 @@ class BrowserController:
                         f"http://localhost:{port}"
                     )
                     contexts = self.browser.contexts
-                    if contexts:
-                        self.page = contexts[0].pages[0] if contexts[0].pages else contexts[0].new_page()
+
+                    # Find the best page to use (prefer one that's not blank)
+                    all_pages = []
+                    for ctx in contexts:
+                        all_pages.extend(ctx.pages)
+
+                    if all_pages:
+                        # Prefer a page that's not about:blank
+                        for p in all_pages:
+                            if p.url and 'about:blank' not in p.url:
+                                self.page = p
+                                break
+                        else:
+                            self.page = all_pages[0]
+                        print(f"✓ Connected to browser on port {port}")
+                        print(f"  Found {len(all_pages)} existing tabs")
                     else:
-                        context = self.browser.new_context()
-                        self.page = context.new_page()
+                        # No pages, create one
+                        if contexts:
+                            self.page = contexts[0].new_page()
+                        else:
+                            context = self.browser.new_context()
+                            self.page = context.new_page()
+
                     self._connected = True
-                    print(f"✓ Connected to browser on port {port} (saved sessions available)")
                     return True
                 except:
                     pass
@@ -113,12 +131,32 @@ class BrowserController:
     def is_connected(self) -> bool:
         return self._connected and self.page is not None
 
+    def _get_all_pages(self) -> List[Page]:
+        """Get all open pages/tabs across all contexts"""
+        pages = []
+        if self.browser:
+            for context in self.browser.contexts:
+                pages.extend(context.pages)
+        return pages
+
+    def _find_page_with_domain(self, domain: str) -> Optional[Page]:
+        """Find an existing page/tab that has the given domain"""
+        domain = domain.lower().replace("www.", "")
+        for page in self._get_all_pages():
+            try:
+                page_url = page.url.lower()
+                if domain in page_url:
+                    return page
+            except:
+                pass
+        return None
+
     # =========================================================================
     # NAVIGATION
     # =========================================================================
 
     def navigate(self, url: str) -> Dict:
-        """Navigate to a URL"""
+        """Navigate to a URL - FIRST checks for existing tabs with that domain"""
         if not self.connect():
             return {"success": False, "error": "Could not connect to browser"}
 
@@ -126,6 +164,25 @@ class BrowserController:
             if not url.startswith("http"):
                 url = "https://" + url
 
+            # Extract domain from URL
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc.replace("www.", "")
+
+            # FIRST: Check if we already have a tab with this domain (logged in!)
+            existing_page = self._find_page_with_domain(domain)
+            if existing_page:
+                print(f"✓ Found existing {domain} tab - switching to it (keeping your login!)")
+                self.page = existing_page
+                self.page.bring_to_front()
+                time.sleep(0.5)
+                return {
+                    "success": True,
+                    "url": self.page.url,
+                    "title": self.page.title(),
+                    "reused_tab": True
+                }
+
+            # No existing tab - navigate current page
             self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
             time.sleep(1)  # Let page settle
 
