@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-ClawdBot v11.1 - JARVIS Mode with Comet Browser
-===============================================
-Fixes the v10 loop bug + connects to Comet browser (saved sessions!)
+ClawdBot v11.1 - TRUE JARVIS Mode (Direct CDP)
+==============================================
+Uses direct Chrome DevTools Protocol (CDP) via websockets.
+NO MORE PLAYWRIGHT HANGING on browsers with many tabs!
 
 Key Changes:
-1. AGENTIC-ONLY TOOLS: No open_url/open_app in browser mode
-2. COMET FIRST: Connects to Comet browser where you're logged in
-3. IMESSAGE ROUTING: "text john" goes to iMessage, "dm john on insta" goes browser
-4. SCROLL_FIND: Can scroll through lists to find people (Instagram followers)
+1. DIRECT CDP: Connects via websocket, not Playwright (instant, no hanging)
+2. SEES YOUR LOGINS: Uses your existing Comet sessions (Instagram, Twitter, etc.)
+3. AGENTIC-ONLY TOOLS: No open_url/open_app - pure browser automation
+4. IMESSAGE ROUTING: "text john" → iMessage, "dm john on insta" → Browser
 
 Architecture:
 - AgenticLoop: SENSE → THINK → ACT → VERIFY → REPEAT
-- Vision: Claude sees screenshots after every action
+- Vision: Claude sees screenshots of YOUR logged-in browser
 - Browser-Only Tools: navigate, click, type, scroll, scroll_find
+
+SETUP: Start Comet with: /Applications/Comet.app/Contents/MacOS/Comet --remote-debugging-port=9222
 """
 
 import os
@@ -28,9 +31,10 @@ from typing import Dict, List, Any, Optional, Callable
 
 import anthropic
 
-# Import browser controller
+# Import browser controller - USE CDP (direct websocket) instead of Playwright
+# Playwright hangs on browsers with many tabs; CDP is instant
 try:
-    from browser import get_browser, BrowserController
+    from browser_cdp import get_browser_cdp, BrowserCDP
     BROWSER_AVAILABLE = True
 except ImportError:
     BROWSER_AVAILABLE = False
@@ -75,9 +79,10 @@ class AgenticToolRegistry:
     """
     Tools for AGENTIC browser mode ONLY.
     NO open_url, NO open_app - those break the loop!
+    Uses BrowserCDP (direct websocket) instead of Playwright.
     """
 
-    def __init__(self, browser: BrowserController):
+    def __init__(self, browser: BrowserCDP):
         self.tools: Dict[str, Tool] = {}
         self._browser = browser
         self._register_tools()
@@ -470,15 +475,15 @@ Return ONLY valid JSON, nothing else:"""
 
 class ClawdBot:
     """
-    ClawdBot v11 - JARVIS Mode Fixed
+    ClawdBot v11.1 - JARVIS Mode with Direct CDP
 
-    For browser tasks: Uses AgenticLoop with BROWSER-ONLY tools
+    For browser tasks: Uses AgenticLoop with direct CDP (no Playwright hanging!)
     For local tasks: Uses LocalToolRegistry
     """
 
     def __init__(self):
         self.claude = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
-        self.browser = get_browser() if BROWSER_AVAILABLE else None
+        self.browser = get_browser_cdp() if BROWSER_AVAILABLE else None
 
         # Separate tool registries
         self.agentic_tools = AgenticToolRegistry(self.browser) if self.browser else None

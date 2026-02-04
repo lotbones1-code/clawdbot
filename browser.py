@@ -50,23 +50,61 @@ class BrowserController:
                     )
                     contexts = self.browser.contexts
 
-                    # Find the best page to use (prefer one that's not blank)
+                    print(f"✓ Connected to browser on port {port}")
+                    print(f"  Found {len(contexts)} browser contexts")
+
+                    # List ALL pages across ALL contexts with their URLs
                     all_pages = []
-                    for ctx in contexts:
-                        all_pages.extend(ctx.pages)
+                    for i, ctx in enumerate(contexts):
+                        ctx_pages = ctx.pages
+                        print(f"  Context {i}: {len(ctx_pages)} pages")
+                        for j, p in enumerate(ctx_pages):
+                            try:
+                                url = p.url
+                                title = p.title()[:50] if p.title() else "No title"
+                                print(f"    Page {j}: {url}")
+                                all_pages.append(p)
+                            except Exception as e:
+                                print(f"    Page {j}: Error reading - {e}")
 
                     if all_pages:
-                        # Prefer a page that's not about:blank
+                        # Find the BEST page - prefer one that's already on a useful site
+                        best_page = None
+                        priority_domains = ['instagram.com', 'twitter.com', 'x.com', 'facebook.com', 'youtube.com']
+
+                        # First, look for a page on a priority domain
                         for p in all_pages:
-                            if p.url and 'about:blank' not in p.url:
-                                self.page = p
-                                break
-                        else:
-                            self.page = all_pages[0]
-                        print(f"✓ Connected to browser on port {port}")
-                        print(f"  Found {len(all_pages)} existing tabs")
+                            try:
+                                url = p.url.lower()
+                                for domain in priority_domains:
+                                    if domain in url:
+                                        best_page = p
+                                        print(f"  → Using existing {domain} tab!")
+                                        break
+                                if best_page:
+                                    break
+                            except:
+                                pass
+
+                        # If no priority domain, use first non-blank page
+                        if not best_page:
+                            for p in all_pages:
+                                try:
+                                    if p.url and 'about:blank' not in p.url and 'chrome://' not in p.url:
+                                        best_page = p
+                                        break
+                                except:
+                                    pass
+
+                        # Last resort: first page
+                        if not best_page:
+                            best_page = all_pages[0]
+
+                        self.page = best_page
+                        print(f"  → Selected page: {self.page.url}")
                     else:
-                        # No pages, create one
+                        # No pages found, create one in existing context
+                        print("  No existing pages, creating new tab...")
                         if contexts:
                             self.page = contexts[0].new_page()
                         else:
@@ -75,7 +113,8 @@ class BrowserController:
 
                     self._connected = True
                     return True
-                except:
+                except Exception as e:
+                    print(f"  Failed to connect on port {port}: {e}")
                     pass
 
             # PRIORITY 2: Try to START Comet with debug port
@@ -168,12 +207,23 @@ class BrowserController:
             from urllib.parse import urlparse
             domain = urlparse(url).netloc.replace("www.", "")
 
+            print(f"[NAV] Want to go to: {domain}")
+            print(f"[NAV] Current page: {self.page.url}")
+
+            # List all available pages
+            all_pages = self._get_all_pages()
+            print(f"[NAV] Scanning {len(all_pages)} tabs for {domain}...")
+
             # FIRST: Check if we already have a tab with this domain (logged in!)
             existing_page = self._find_page_with_domain(domain)
             if existing_page:
-                print(f"✓ Found existing {domain} tab - switching to it (keeping your login!)")
+                print(f"[NAV] ✓ Found existing {domain} tab!")
+                print(f"[NAV]   URL: {existing_page.url}")
                 self.page = existing_page
-                self.page.bring_to_front()
+                try:
+                    self.page.bring_to_front()
+                except:
+                    pass  # bring_to_front may not work with CDP
                 time.sleep(0.5)
                 return {
                     "success": True,
@@ -181,6 +231,8 @@ class BrowserController:
                     "title": self.page.title(),
                     "reused_tab": True
                 }
+
+            print(f"[NAV] No existing {domain} tab found, navigating...")
 
             # No existing tab - navigate current page
             self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -192,6 +244,7 @@ class BrowserController:
                 "title": self.page.title()
             }
         except Exception as e:
+            print(f"[NAV] Error: {e}")
             return {"success": False, "error": str(e)}
 
     def get_current_url(self) -> str:
