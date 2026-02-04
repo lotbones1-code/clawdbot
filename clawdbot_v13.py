@@ -304,20 +304,70 @@ class ClawdBot:
 
         # Extract recipient and message for DMs
         if info["task"] == "send_dm":
-            # Pattern: "send dm to abeer on instagram saying hello"
+            # Patterns for: "send dm to abeer on instagram saying hello"
             patterns = [
-                r'(?:dm|message)\s+(?:to\s+)?(\w+).*?(?:saying|with|:)\s*["\']?(.+?)["\']?$',
-                r'(?:send|dm|message)\s+(\w+)\s+(?:on\s+\w+\s+)?(?:saying|with)\s+(.+)',
-                r'(?:message|dm)\s+(\w+)\s+(?:on\s+\w+)?\s*(.+)?',
+                # "send dm to abeer on instagram saying hello"
+                r'(?:send\s+)?(?:dm|message)\s+(?:to\s+)?(\w+)\s+on\s+\w+\s+(?:saying|with)\s+(.+)',
+                # "dm abeer on instagram saying hello"
+                r'(?:dm|message)\s+(\w+)\s+on\s+\w+\s+(?:saying|with)\s+(.+)',
+                # "message abeer saying hello"
+                r'(?:dm|message)\s+(\w+)\s+(?:saying|with)\s+(.+)',
+                # "send message to abeer saying hello"
+                r'(?:send\s+)?message\s+(?:to\s+)?(\w+).*?(?:saying|with)\s+(.+)',
             ]
             for pattern in patterns:
                 match = re.search(pattern, request, re.IGNORECASE)
                 if match:
                     info["recipient"] = match.group(1)
-                    info["message"] = match.group(2) if len(match.groups()) > 1 else ""
+                    info["message"] = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else ""
                     break
 
         return info
+
+    def _offer_to_learn(self, info: Dict) -> str:
+        """Offer to learn a new task interactively - handles input properly"""
+        task = info.get('task', 'unknown')
+        site = info.get('site', '')
+
+        print(f"\n❓ I don't know how to do '{task}' on {site} yet.")
+        print("   Would you like to teach me? (yes/no)")
+        print("   Or use: python3 clawdbot_v13.py --learn {task} {site}")
+
+        try:
+            # This input() blocks and waits for user response
+            answer = input("\n   > ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return "Learning cancelled."
+
+        if answer not in ['yes', 'y', 'yeah', 'sure', 'ok', 'teach']:
+            return "OK. To teach me later, run: python3 clawdbot_v13.py --learn " + task + " " + site
+
+        # Enter learning mode
+        self.log("LEARN", "Entering learning mode...")
+        start_url = f"https://www.{site}/" if site else None
+
+        try:
+            agent = self.learner.learn_task(task, site, start_url)
+        except Exception as e:
+            return f"✗ Learning failed: {e}"
+
+        if not agent:
+            return "Learning was cancelled or failed."
+
+        # Execute the newly learned agent
+        params = {
+            "recipient": info.get("recipient", ""),
+            "message": info.get("message", ""),
+        }
+
+        try:
+            result = self.learner.execute_agent(agent, params)
+            if result.get("success"):
+                return f"✓ Task complete! I've learned '{task}' for next time."
+            else:
+                return f"✗ Learned but execution failed: {result.get('error')}"
+        except Exception as e:
+            return f"✗ Execution error: {e}"
 
     # =========================================================================
     # MAIN PROCESSING
@@ -357,12 +407,18 @@ class ClawdBot:
         if self.needs_browser(request):
             info = self.extract_task_info(request)
             self.log("MODE", f"Browser task: {info['task']} on {info['site']}")
+            self.log("INFO", f"Extracted: recipient='{info['recipient']}', message='{info['message']}'")
 
             # Check for learned agent
             if self.learner:
-                agent = self.learner.find_agent_for_task(info["task"], info["site"])
+                try:
+                    agent = self.learner.find_agent_for_task(info["task"], info["site"])
+                except Exception as e:
+                    self.log("ERROR", f"Agent lookup failed: {e}")
+                    agent = None
 
                 if agent:
+                    # Execute existing agent
                     self.log("AGENT", f"Found learned agent: {agent.get('task')}")
                     params = {
                         "recipient": info.get("recipient", ""),
@@ -374,35 +430,10 @@ class ClawdBot:
                         return f"✓ Task complete! Used learned agent.\n  Steps: {result.get('completed_steps')}"
                     else:
                         return f"✗ Agent failed: {result.get('error')}"
-
                 else:
                     # No agent - offer to learn
                     self.log("LEARN", "No agent found for this task")
-                    print(f"\n❓ I don't know how to do '{info['task']}' on {info['site']} yet.")
-                    print("   Would you like to teach me? (yes/no)")
-
-                    try:
-                        answer = input("   > ").strip().lower()
-                        if answer in ['yes', 'y', 'yeah', 'sure']:
-                            start_url = f"https://www.{info['site']}/" if info['site'] else None
-                            agent = self.learner.learn_task(info['task'], info['site'], start_url)
-
-                            if agent:
-                                # Now execute it
-                                params = {
-                                    "recipient": info.get("recipient", ""),
-                                    "message": info.get("message", ""),
-                                }
-                                result = self.learner.execute_agent(agent, params)
-                                if result.get("success"):
-                                    return f"✓ Task complete! I've learned this for next time."
-                                else:
-                                    return f"✗ Learned but execution failed: {result.get('error')}"
-
-                        return "OK, let me know when you want to teach me."
-
-                    except (EOFError, KeyboardInterrupt):
-                        return "Learning cancelled."
+                    return self._offer_to_learn(info)
 
             # Fallback: use Claude's agentic loop (from v12)
             return self.fallback_agentic_loop(request)
