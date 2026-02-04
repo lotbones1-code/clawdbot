@@ -1,12 +1,15 @@
 """
-Browser Controller for ClawdBot v9
-===================================
+Browser Controller for ClawdBot v10
+====================================
 Uses Playwright for reliable browser automation.
-Can navigate, click, type, read pages, and verify actions.
+Can navigate, click, type, read pages, take screenshots, and verify actions.
+
+NEW in v10: screenshot_base64() for Claude vision integration.
 """
 
 import time
 import json
+import base64
 from typing import Dict, List, Optional, Any
 
 try:
@@ -348,7 +351,7 @@ class BrowserController:
             return False
 
     def screenshot(self, path: str = None) -> Dict:
-        """Take a screenshot"""
+        """Take a screenshot and save to file"""
         if not self.is_connected():
             return {"success": False, "error": "Not connected"}
 
@@ -358,6 +361,27 @@ class BrowserController:
 
             self.page.screenshot(path=path)
             return {"success": True, "path": path}
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def screenshot_base64(self) -> Dict:
+        """Take a screenshot and return as base64 for Claude vision"""
+        if not self.is_connected():
+            return {"success": False, "error": "Not connected"}
+
+        try:
+            # Get screenshot as bytes
+            png_bytes = self.page.screenshot(type="png")
+            # Convert to base64
+            b64_string = base64.b64encode(png_bytes).decode("utf-8")
+
+            return {
+                "success": True,
+                "image": b64_string,
+                "url": self.page.url,
+                "title": self.page.title()
+            }
 
         except Exception as e:
             return {"success": False, "error": str(e)}
