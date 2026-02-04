@@ -1,10 +1,11 @@
 """
-Browser Controller for ClawdBot v10
+Browser Controller for ClawdBot v11
 ====================================
 Uses Playwright for reliable browser automation.
 Can navigate, click, type, read pages, take screenshots, and verify actions.
 
 NEW in v10: screenshot_base64() for Claude vision integration.
+NEW in v11: scroll_find() to search scrolling lists for text.
 """
 
 import time
@@ -349,6 +350,34 @@ class BrowserController:
             return text.lower() in content.lower()
         except:
             return False
+
+    def scroll_find(self, text: str, max_scrolls: int = 15) -> Dict:
+        """Scroll down looking for text, return when found (for infinite scroll lists)"""
+        if not self.is_connected():
+            return {"success": False, "error": "Not connected"}
+
+        try:
+            for i in range(max_scrolls):
+                # Check if text is visible
+                if self.has_text(text):
+                    return {
+                        "success": True,
+                        "found": text,
+                        "scrolls": i,
+                        "message": f"Found '{text}' after {i} scrolls"
+                    }
+
+                # Scroll down
+                self.page.mouse.wheel(0, 400)
+                time.sleep(0.8)  # Wait for content to load
+
+            return {
+                "success": False,
+                "error": f"'{text}' not found after {max_scrolls} scrolls"
+            }
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def screenshot(self, path: str = None) -> Dict:
         """Take a screenshot and save to file"""
